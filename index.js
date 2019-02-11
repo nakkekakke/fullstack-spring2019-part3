@@ -1,8 +1,10 @@
+require('dotenv').config()
 const express = require('express');
 const app = express();
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const cors = require('cors')
+const Person = require('./models/person')
 
 app.use(cors())
 app.use(express.static('build'))
@@ -16,85 +18,100 @@ morgan.token('person', (req, res) => {
 app.use(bodyParser.json());
 app.use(morgan(":method :url :status :res[context-length] - :response-time ms :person"));
 
-let persons = [
-  {
-    id: 1,
-    name: "Arto Hellas",
-    number: "045-1236543"
-  },
-  {
-    id: 2,
-    name: "Arto Järvinen",
-    number: "041-21423123"
-  },
-  {
-    id: 3,
-    name: "Lea Kutvonen",
-    number: "040-4323234"
-  },
-  {
-    id: 4,
-    name: "Martti Tienari",
-    number: "09-784232"
-  }
-]
 
-const infoTemplate = () => {
+const infoTemplate = (personCount) => {
   return (`
     <div>
-      <p>Puhelinluettelossa ${persons.length} henkilön tiedot</p>
+      <p>Puhelinluettelossa ${personCount} henkilön tiedot</p>
       <p>${new Date()}</p>
     </div>
   `)
 }
 
-app.get('/api/persons', (req, res) => {
-  res.json(persons);
+app.get('/api/persons', (req, res, next) => {
+  Person.find({})
+    .then(persons => {
+      res.json(persons.map(person => person.toJSON()))
+    })
+    .catch(error => next(error))
 })
 
-app.get('/info', (req, res) => {
-  res.send(infoTemplate());
+app.get('/info', (req, res, next) => {
+  Person.find({})
+    .then(persons => {
+      res.send(infoTemplate(persons.length));
+    })
+    .catch(error => next(error))
 })
 
-app.get('/api/persons/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const found = persons.find(person => person.id === id);
-
-  if (found) {
-    res.send(found);
-  } else {
-    res.status(404).end();
-  }
+app.get('/api/persons/:id', (req, res, next) => {
+  Person.findById(req.params.id)
+    .then(person => {
+      if (person) {
+        res.json(person.toJSON())
+      } else {
+        res.status(404).end()
+      }
+    })
+    .catch(error => next(error))
 })
 
-app.delete('/api/persons/:id', (req, res) => {
-  const id = Number(req.params.id);
-  persons = persons.filter(person => person.id !== id);
-  res.status(204).end();
+app.delete('/api/persons/:id', (req, res, next) => {
+  Person.findByIdAndDelete(req.params.id)
+    .then(res.status(204).end())
+    .catch(error => next(error))
 })
 
-app.post('/api/persons', (req, res) => {
+app.post('/api/persons', (req, res, next) => {
   const person = req.body;
   console.log(person);
-  if (person.name === undefined || person.number === undefined) {
-    return res.status(400).json({
-      error: 'Name or number missing'
-    })
-  } else if (persons.map(p => p.name).includes(person.name)) {
-    return res.status(409).json({
-      error: 'Name must be unique'
-    })
-  }
 
-  const newPerson = {
+  const newPerson = new Person({
     id: Math.floor(Math.random() * 1000) + 5,
     name: person.name,
     number: person.number
+  })
+
+  newPerson.save()
+    .then(savedPerson => {
+      res.json(savedPerson.toJSON())
+    })
+    .catch(error => next(error))
+})
+
+app.put('/api/persons/:id', (req, res, next) => {
+  const body = req.body
+  const person = {
+    name: body.name,
+    number: body.number
   }
 
-  persons = persons.concat(newPerson);
-  res.json(newPerson);
+  Person.findByIdAndUpdate(req.params.id, person, {new: true})
+    .then(updatedPerson => {
+      res.json(updatedPerson.toJSON())
+    })
+    .catch(error => next(error))
 })
+
+const unknownEndpoint = (req, res) => {
+  res.status(404).send({error: 'Unknown endpoint'})
+}
+
+app.use(unknownEndpoint)
+
+const errorHandler = (error, req, res, next) => {
+  console.error(error.message)
+
+  if (error.name === 'CastError' && error.kind == 'ObjectId') {
+    return res.status(400).send({ error: 'Bad id format' })
+  } else if (error.name === 'ValidationError') {
+    return res.status(400).json({error: error.message})
+  }
+
+  next(error)
+}
+
+app.use(errorHandler)
 
 const port = process.env.PORT || 3001;
 app.listen(port, () => {
